@@ -11,7 +11,12 @@ from barkyarch.services.commands import (
     DeleteBookmarkCommand,
     EditBookmarkCommand,
 )
-
+from channels.testing import ApplicationCommunicator
+from channels.layers import get_channel_layer
+from barkyapi.signals import send_bookmark_to_channel, log_bookmark_to_csv
+import os
+import csv
+from unittest.mock import patch
 
 class TestCommands(TestCase):
     def setUp(self):
@@ -94,3 +99,62 @@ class TestCommands(TestCase):
 
         # that object is the same as the one we inserted
         self.assertEqual(Bookmark.objects.get(id=1).title, "goofy")
+
+
+# testing logging bookmarks to csv
+class SignalHandlersTestCase(TestCase):
+    def setUp(self):
+        current_directory = os.path.dirname(os.path.abspath(__file__))
+        # Create a test CSV file path
+        self.csv_file_path = os.path.join(current_directory, "domain", "created_log.csv")
+        self.channel_layer = get_channel_layer()
+
+    def tearDown(self):
+        # Remove the test CSV file after the test is done
+        if os.path.exists(self.csv_file_path):
+            os.remove(self.csv_file_path)
+
+    def test_log_bookmark_to_csv(self):
+        # Create a mock Bookmark instance
+        bookmark = Bookmark.objects.create(
+            title="Test Bookmark",
+            url="http://www.example.com",
+            notes="Test notes",
+            date_added=localtime().date()
+        )
+
+        # Call the signal handler
+        log_bookmark_to_csv(sender=Bookmark, instance=bookmark)
+
+        # Check if the CSV file was created
+        self.assertTrue(os.path.exists(self.csv_file_path))
+
+        # Read the content of the CSV file
+        with open(self.csv_file_path, "r") as csv_file:
+            csv_reader = csv.reader(csv_file)
+            rows = list(csv_reader)
+
+            # Check if the CSV file contains the expected data
+            self.assertEqual(rows[1][1], "Test Bookmark")  # Title
+            self.assertEqual(rows[1][2], "http://www.example.com")  # URL
+            self.assertEqual(rows[1][3], "Test notes")  # Notes
+
+    def test_send_bookmark_to_channel(self):
+        # Create a mock Bookmark instance
+        bookmark = Bookmark.objects.create(
+            title="Test Bookmark",
+            url="http://www.example.com",
+            notes="Test notes",
+            date_added=localtime().date()
+        )
+
+        class MockChannelLayer:
+            def send(self, *args, **kwargs):
+                pass
+
+        mock_channel_layer = MockChannelLayer()
+
+        # Patch the channel layer
+        with patch("barkyapi.signals.get_channel_layer", return_value=mock_channel_layer):
+            # Call the signal handler
+            send_bookmark_to_channel(sender=Bookmark, instance=bookmark)
